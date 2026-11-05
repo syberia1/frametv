@@ -1,5 +1,5 @@
 /**
- * frameXTV for Kino — 1.3.0
+ * frameXTV for Kino — 1.3.1
  * Hardened against invalid-id drops and catalog/episode/item ref forms.
  */
 const DEFAULT_API = "https://api.framextv.cc";
@@ -602,23 +602,71 @@ async function fetchProviderStream(type, id, season, episode, provider) {
   };
 }
 
+/**
+ * API labels many tracks as "vtt" but OpenSubtitles/stremio bodies are SRT
+ * (timestamps with commas). Wrong format → Kino lists them but shows nothing.
+ */
+function detectSubFormat(s, url) {
+  const declared = String((s && (s.format || s.type)) || "").toLowerCase();
+  if (declared === "srt" || declared === "vtt") {
+    // stremio opensubtitles path always serves application/x-subrip
+    if (/subs\d*\.strem\.io/i.test(url) || /opensubtitles/i.test(url)) return "srt";
+    return declared;
+  }
+  if (/\.vtt(\?|$)/i.test(url)) return "vtt";
+  if (/\.srt(\?|$)/i.test(url)) return "srt";
+  if (/strem\.io/i.test(url)) return "srt";
+  return "srt";
+}
+
+function normLang(code) {
+  let c = String(code || "und").toLowerCase().replace(/_/g, "-").trim();
+  if (!c) return "und";
+  // Kino lang max 20; simplify regional tags the player may not match
+  if (c === "pt-br" || c === "pt-pt") return c === "pt-br" ? "pt" : "pt";
+  if (c.indexOf("-") > 0 && c.length > 5) c = c.split("-")[0];
+  return c.slice(0, 20) || "und";
+}
+
 function subtitleTracks(subs) {
-  const out = [];
+  const raw = [];
   const seen = {};
   for (let i = 0; i < (subs || []).length; i++) {
     const s = subs[i];
     if (!s || !s.url) continue;
-    const url = String(s.url);
+    const url = String(s.url).trim();
+    if (!/^https?:\/\//i.test(url)) continue;
     if (seen[url]) continue;
     seen[url] = true;
-    out.push({
+
+    const lang = normLang(s.language || s.lang || "");
+    let label = String(s.label || s.language || s.lang || lang || "Subs")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 60);
+    if (!label) label = lang.toUpperCase();
+
+    raw.push({
       url: url,
-      lang: String(s.language || s.lang || "und").slice(0, 16),
-      label: String(s.label || s.language || "Subs").slice(0, 60)
+      lang: lang,
+      label: label,
+      format: detectSubFormat(s, url)
     });
-    if (out.length >= 8) break;
   }
-  return out;
+
+  // Prefer Spanish, then English, then the rest (stable within group)
+  function rank(lang) {
+    if (lang === "es" || lang.indexOf("es-") === 0) return 0;
+    if (lang === "en" || lang.indexOf("en-") === 0) return 1;
+    if (lang === "pt") return 2;
+    return 3;
+  }
+  raw.sort(function (a, b) {
+    return rank(a.lang) - rank(b.lang);
+  });
+
+  // Stream side: contract maxSubtitles is small (10)
+  return raw.slice(0, 10);
 }
 
 function buildStream(primary, usedProvider, extras, alternateProviders, subtitles, p) {
