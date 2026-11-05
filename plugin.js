@@ -1,5 +1,5 @@
 /**
- * frameXTV — Kino plugin 1.2.0
+ * frameXTV — Kino plugin 1.2.1
  * Contract: apiVersion 6, capabilities search/home/browse/episodes/resolve/download
  * Backend: https://api.framextv.cc (mirrors .xyz/.tech/.pro)
  */
@@ -171,9 +171,10 @@ function toItem(row) {
   const title = String(row.title || id).replace(/\s+/g, " ").trim().slice(0, 200);
   if (!title) return null;
   const kind = type === "movie" ? "movie" : "series";
+  // item.id: contract itemIdPattern ^[A-Za-z0-9._~-]{1,128}$  (NO colon)
   const ref = "a:" + type + ":" + id;
   const item = {
-    id: type + ":" + id,
+    id: type + "-" + id,
     ref: ref,
     title: title,
     kind: kind

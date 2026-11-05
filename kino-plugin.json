@@ -1,7 +1,7 @@
 {
   "id": "framextv",
   "name": "frameXTV",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Peliculas, series y anime de framextv.cc con todos los servidores disponibles.",
