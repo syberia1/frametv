@@ -1,11 +1,12 @@
 {
   "id": "framextv",
   "name": "frameXTV",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Peliculas, series y anime de framextv.cc con todos los servidores disponibles.",
   "author": "community",
+  "homepage": "https://framextv.cc",
   "hosts": [
     "framextv.cc",
     "www.framextv.cc",
@@ -21,11 +22,7 @@
     "s4.anilist.co",
     "crap.hybrows.workers.dev",
     "frappe.hybrows.workers.dev",
-    "framextv-downloads.hybrows.workers.dev",
-    "player.videasy.to",
-    "vidlink.pro",
-    "enc-dec.app",
-    "api.wecollege.net"
+    "framextv-downloads.hybrows.workers.dev"
   ],
   "streamHosts": "any",
   "capabilities": [
@@ -41,16 +38,13 @@
     "series",
     "anime"
   ],
-  "discoverable": true,
-  "debug": false,
   "color": "#A855F7",
   "settings": [
     {
       "key": "apiBase",
-      "label": "API backend",
+      "label": "API",
       "type": "select",
       "default": "https://api.framextv.cc",
-      "hint": "Si uno falla, cambia de backend.",
       "options": [
         {
           "value": "https://api.framextv.cc",
@@ -75,7 +69,6 @@
       "label": "Servidor preferido",
       "type": "select",
       "default": "auto",
-      "hint": "Se intenta primero; el resto queda en el menu Servidor.",
       "options": [
         {
           "value": "auto",
@@ -83,59 +76,43 @@
         },
         {
           "value": "bowler",
-          "label": "Bowler XVIII"
+          "label": "Bowler"
         },
         {
           "value": "executioner",
-          "label": "Executioner I"
+          "label": "Executioner"
         },
         {
           "value": "titan",
-          "label": "Titan VII"
+          "label": "Titan"
         },
         {
           "value": "giant",
-          "label": "Giant XI"
+          "label": "Giant"
         },
         {
           "value": "grand_warden",
-          "label": "Grand Warden I"
+          "label": "Grand Warden"
         },
         {
           "value": "root_rider",
-          "label": "Root Rider I"
+          "label": "Root Rider"
         },
         {
           "value": "archer_queen",
-          "label": "Archer Queen I"
+          "label": "Archer Queen"
         },
         {
           "value": "hog_rider",
-          "label": "Hog Rider XI"
+          "label": "Hog Rider"
         },
         {
           "value": "lavahound",
-          "label": "Lava Hound XII"
+          "label": "Lava Hound"
         },
         {
           "value": "sparky",
-          "label": "Sparky I"
-        },
-        {
-          "value": "super_barbarian",
-          "label": "Super Barbarian XVI"
-        },
-        {
-          "value": "barbarian_king",
-          "label": "Barbarian King I"
-        },
-        {
-          "value": "battle_copter",
-          "label": "Battle Copter I"
-        },
-        {
-          "value": "little_prince",
-          "label": "Little Prince I"
+          "label": "Sparky"
         }
       ]
     }

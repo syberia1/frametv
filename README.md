@@ -1,18 +1,11 @@
-# frameXTV — plugin de Kino
+# frameXTV for Kino 1.2.0
 
-Fuente: https://framextv.cc (API `api.framextv.cc` / `.xyz` / `.tech` / `.pro`)
+Cumple el contrato Kino (apiVersion 6):
 
-## Capacidades
-- Home: tendencias, películas, series, anime, estrenos, géneros
-- Búsqueda
-- Ficha de película / serie con temporadas y capítulos
-- Reproducción con todos los servidores del backend (`/api/stream` + `provider=`)
-- Alternativas diferidas (menú Servidor / fallo automático)
-- Subtítulos cuando el API los entrega
+- `search` → Item[]
+- `home` → HomeRow[] con `id`, `title`, `ref`, `items` (como el plugin archive oficial)
+- `browse` → { items, next }
+- `episodes` → { series, episodes }
+- `resolve` → Stream (con `download` capability y `streamHosts: any`)
 
-## Ajustes
-- **API backend**: cambia si un mirror falla
-- **Servidor preferido**: Bowler, Executioner, Titan, etc.
-
-## Instalar
-En Kino: añadir plugin desde el ZIP o la URL del `kino-plugin.json`.
+API: `api.framextv.cc` (+ fallbacks automáticos a .xyz/.tech/.pro)
