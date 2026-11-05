@@ -1,7 +1,6 @@
 /**
- * frameXTV — Kino plugin 1.2.1
- * Contract: apiVersion 6, capabilities search/home/browse/episodes/resolve/download
- * Backend: https://api.framextv.cc (mirrors .xyz/.tech/.pro)
+ * frameXTV for Kino — 1.3.0
+ * Hardened against invalid-id drops and catalog/episode/item ref forms.
  */
 const DEFAULT_API = "https://api.framextv.cc";
 const API_FALLBACKS = [
@@ -13,6 +12,8 @@ const API_FALLBACKS = [
 const SITE = "https://framextv.cc";
 const UA =
   "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+
+/** Contract itemIdPattern: ^[A-Za-z0-9._~-]{1,128}$ — NO colon */
 const ID_RE = /^[A-Za-z0-9._~-]{1,128}$/;
 
 const PROVIDERS = [
@@ -120,10 +121,10 @@ async function fetchJson(url) {
     }
   });
   if (!r || !r.ok) {
-    throw new Error("HTTP " + (r ? r.status : 0) + " " + url);
+    throw new Error("HTTP " + (r ? r.status : 0));
   }
   const text = bodyText(r).trim();
-  if (!text) throw new Error("empty body " + url);
+  if (!text) throw new Error("empty body");
   return JSON.parse(text);
 }
 
@@ -135,11 +136,10 @@ async function apiGet(path) {
   let last = null;
   for (let i = 0; i < bases.length; i++) {
     try {
-      const data = await fetchJson(bases[i] + path);
-      return data;
+      return await fetchJson(bases[i] + path);
     } catch (e) {
       last = e;
-      log("apiGet fail", bases[i] + path, (e && e.message) || e);
+      log("api", bases[i] + path, (e && e.message) || e);
     }
   }
   throw last || new Error("api down");
@@ -148,10 +148,10 @@ async function apiGet(path) {
 function absImg(u) {
   u = String(u || "").trim();
   if (!u) return "";
-  if (u.indexOf("//") === 0) return "https:" + u;
-  if (/^https?:\/\//i.test(u)) return u.slice(0, 2048);
-  if (u.charAt(0) === "/") return ("https://image.tmdb.org" + u).slice(0, 2048);
-  return "";
+  if (u.indexOf("//") === 0) u = "https:" + u;
+  else if (u.charAt(0) === "/") u = "https://image.tmdb.org" + u;
+  else if (!/^https?:\/\//i.test(u)) return "";
+  return u.slice(0, 2048);
 }
 
 function resultsOf(data) {
@@ -162,34 +162,50 @@ function resultsOf(data) {
   return [];
 }
 
-/** Catalog item — fields allowed by the contract. */
+function normType(t) {
+  t = String(t || "movie").toLowerCase();
+  if (t === "movie" || t === "tv" || t === "anime") return t;
+  if (t === "series" || t === "show") return "tv";
+  return "movie";
+}
+
+/** Build catalog item. id NEVER contains ':' (Kino drops those). */
 function toItem(row) {
   if (!row) return null;
-  const id = String(row.id == null ? "" : row.id).trim();
-  if (!ID_RE.test(id)) return null;
-  const type = String(row.type || "movie").toLowerCase();
-  const title = String(row.title || id).replace(/\s+/g, " ").trim().slice(0, 200);
+  const rawId = String(row.id == null ? "" : row.id).trim();
+  if (!rawId || !ID_RE.test(rawId)) return null;
+  const type = normType(row.type);
+  const title = String(row.title || rawId).replace(/\s+/g, " ").trim().slice(0, 200);
   if (!title) return null;
-  const kind = type === "movie" ? "movie" : "series";
-  // item.id: contract itemIdPattern ^[A-Za-z0-9._~-]{1,128}$  (NO colon)
-  const ref = "a:" + type + ":" + id;
+
+  const itemId = type + "-" + rawId;
+  if (!ID_RE.test(itemId)) return null;
+
   const item = {
-    id: type + "-" + id,
-    ref: ref,
+    id: itemId,
+    ref: "a:" + type + ":" + rawId,
     title: title,
-    kind: kind
+    kind: type === "movie" ? "movie" : "series"
   };
+
   const poster = absImg(row.poster || row.image || "");
   if (poster) item.poster = poster;
-  if (row.year) item.year = String(row.year).slice(0, 9);
-  if (row.overview) item.overview = String(row.overview).replace(/<[^>]*>/g, "").slice(0, 400);
+
+  if (row.year) {
+    const y = String(row.year).slice(0, 9);
+    if (y) item.year = y;
+  }
+  if (row.overview) {
+    item.overview = String(row.overview).replace(/<[^>]*>/g, "").slice(0, 400);
+  }
   if (row.rating != null && row.rating !== "") {
     const n = parseFloat(row.rating);
     if (!isNaN(n) && n >= 0 && n <= 10) item.rating = n;
   }
+
   if (type === "anime") {
     try {
-      kino.storage.set("animeTitle:" + id, title, { ttlMs: 14 * 86400000 });
+      kino.storage.set("animeTitle:" + rawId, title, { ttlMs: 14 * 86400000 });
     } catch (e) {}
   }
   return item;
@@ -206,22 +222,92 @@ function mapItems(rows, limit) {
   return out;
 }
 
-/** search(query: KinoSearchQuery) → Item[] */
+function episodeRef(type, id, season, episode) {
+  return (
+    "e:" +
+    type +
+    ":" +
+    id +
+    ":" +
+    String(season || 1) +
+    ":" +
+    String(episode || 1)
+  );
+}
+
+/**
+ * Accept every ref shape Kino may pass:
+ *  - e:movie:550:1:1          episode from episodes()
+ *  - a:movie:550              catalog item.ref
+ *  - movie-550                catalog item.id
+ *  - s:bowler:e:movie:550:1:1 lazy server alternative
+ *  - 550                      bare numeric id (movie)
+ */
+function parsePlayRef(ref) {
+  const s = String(ref || "").trim();
+  if (!s) return null;
+
+  let m = /^s:([a-z0-9_]+):e:(movie|tv|anime):([A-Za-z0-9._~-]+):(\d+):(\d+)$/.exec(s);
+  if (m) {
+    return {
+      provider: m[1],
+      type: m[2],
+      id: m[3],
+      season: parseInt(m[4], 10) || 1,
+      episode: parseInt(m[5], 10) || 1
+    };
+  }
+
+  m = /^e:(movie|tv|anime):([A-Za-z0-9._~-]+):(\d+):(\d+)$/.exec(s);
+  if (m) {
+    return {
+      provider: "",
+      type: m[1],
+      id: m[2],
+      season: parseInt(m[3], 10) || 1,
+      episode: parseInt(m[4], 10) || 1
+    };
+  }
+
+  m = /^a:(movie|tv|anime):([A-Za-z0-9._~-]+)$/.exec(s);
+  if (m) {
+    return { provider: "", type: m[1], id: m[2], season: 1, episode: 1 };
+  }
+
+  m = /^(movie|tv|anime)-([A-Za-z0-9._~-]+)$/.exec(s);
+  if (m) {
+    return { provider: "", type: m[1], id: m[2], season: 1, episode: 1 };
+  }
+
+  if (/^\d{1,12}$/.test(s)) {
+    return { provider: "", type: "movie", id: s, season: 1, episode: 1 };
+  }
+
+  return null;
+}
+
 export async function search(query) {
   let q = "";
+  let page = 1;
   try {
-    if (typeof query === "string") q = query;
-    else if (query && typeof query === "object") {
+    if (typeof query === "string") {
+      q = query;
+    } else if (query && typeof query === "object") {
       q = String(query.q || query.originalTitle || "");
-      if (!q && query.altTitles && query.altTitles[0]) q = String(query.altTitles[0]);
+      if (!q && query.altTitles && query.altTitles.length) {
+        q = String(query.altTitles[0] || "");
+      }
+      if (query.cursor) page = Math.max(1, parseInt(query.cursor, 10) || 1);
     }
   } catch (e) {}
   q = String(q || "").replace(/\s+/g, " ").trim().slice(0, 100);
   if (q.length < 1) return [];
 
-  log("search", q);
+  log("search", q, "p" + page);
   try {
-    const data = await apiGet("/api/search?q=" + encodeURIComponent(q) + "&page=1");
+    const data = await apiGet(
+      "/api/search?q=" + encodeURIComponent(q) + "&page=" + page
+    );
     const items = mapItems(resultsOf(data), 40);
     log("search ok", items.length);
     return items;
@@ -231,13 +317,9 @@ export async function search(query) {
   }
 }
 
-/**
- * home() → HomeRow[]
- * Each row needs id, title, ref (for browse / "Ver más"), items.
- */
 export async function home() {
   const out = [];
-  log("home start", apiBase());
+  log("home", apiBase());
 
   try {
     const data = await apiGet("/api/home");
@@ -248,7 +330,6 @@ export async function home() {
       if (!rail) continue;
       const items = mapItems(resultsOf(rail), 24);
       if (!items.length) continue;
-      // Contract/archive pattern: id + title + ref + items
       out.push({
         id: meta.id,
         title: meta.title,
@@ -256,7 +337,7 @@ export async function home() {
         items: items
       });
     }
-    log("home rails", out.length);
+    log("home rows", out.length);
   } catch (e) {
     log("home err", (e && e.message) || e);
   }
@@ -268,39 +349,39 @@ export async function home() {
       if (items.length) {
         out.push({ id: "trending", title: "Tendencias", ref: "trending", items: items });
       }
-      log("home trending", items.length);
     } catch (e) {
-      log("home trending err", (e && e.message) || e);
+      log("home trending", (e && e.message) || e);
     }
   }
 
   if (!out.length) {
     try {
-      const s = await apiGet("/api/search?q=movie&page=1");
+      const s = await apiGet("/api/search?q=a&page=1");
       const items = mapItems(resultsOf(s), 24);
       if (items.length) {
         out.push({ id: "catalog", title: "Catalogo", ref: "catalog", items: items });
       }
-      log("home catalog", items.length);
     } catch (e) {
-      log("home catalog err", (e && e.message) || e);
+      log("home catalog", (e && e.message) || e);
     }
   }
 
   return out;
 }
 
-/** browse(ref, cursor) → { items, next } */
 export async function browse(ref, cursor) {
-  await null; // never throw before first await (archive pattern)
+  await null;
   const key = String(ref || "");
-  const page = cursor ? parseInt(cursor, 10) : 1;
-  const pageNum = page >= 1 && page <= 100 ? page : 1;
+  const pageNum = Math.max(1, Math.min(100, parseInt(cursor || "1", 10) || 1));
 
-  const railMeta = RAILS.filter(function (r) {
-    return r.id === key;
-  })[0];
-  if (railMeta || key === "catalog") {
+  let isRail = false;
+  for (let i = 0; i < RAILS.length; i++) {
+    if (RAILS[i].id === key) {
+      isRail = true;
+      break;
+    }
+  }
+  if (isRail || key === "catalog") {
     try {
       const data = await apiGet("/api/home");
       const rail = ((data && data.rails) || {})[key];
@@ -331,7 +412,7 @@ async function mapAnimeToTv(anilistId, title) {
     const data = await apiGet("/api/search?q=" + encodeURIComponent(q));
     const rows = resultsOf(data);
     for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i].type).toLowerCase() === "tv") {
+      if (normType(rows[i].type) === "tv") {
         const tid = String(rows[i].id);
         try {
           kino.storage.set("animeMap:" + anilistId, tid, { ttlMs: 30 * 86400000 });
@@ -343,11 +424,20 @@ async function mapAnimeToTv(anilistId, title) {
   return null;
 }
 
-/** episodes(ref) → { series, episodes } */
 export async function episodes(ref) {
   await null;
-  const m = /^a:(movie|tv|anime):([A-Za-z0-9._~-]+)$/.exec(String(ref || ""));
-  if (!m) throw err("not_found", "ref " + ref, "Titulo no valido.");
+  const s = String(ref || "").trim();
+  log("episodes ref", s);
+
+  // Accept a:type:id OR type-id (if app ever passes id)
+  let m = /^a:(movie|tv|anime):([A-Za-z0-9._~-]+)$/.exec(s);
+  if (!m) {
+    m = /^(movie|tv|anime)-([A-Za-z0-9._~-]+)$/.exec(s);
+  }
+  if (!m) {
+    throw err("not_found", "ref " + s, "Titulo no valido.");
+  }
+
   const origType = m[1];
   let type = m[1];
   let id = m[2];
@@ -366,7 +456,7 @@ export async function episodes(ref) {
         {
           season: 1,
           number: 1,
-          ref: "e:movie:" + id + ":1:1",
+          ref: episodeRef("movie", id, 1, 1),
           title: series.title,
           still: series.poster || ""
         }
@@ -384,6 +474,7 @@ export async function episodes(ref) {
     if (mapped) {
       tvId = mapped;
       type = "tv";
+      log("anime mapped", id, "->", tvId);
     }
   }
 
@@ -398,7 +489,7 @@ export async function episodes(ref) {
           {
             season: 1,
             number: 1,
-            ref: "e:anime:" + id + ":1:1",
+            ref: episodeRef("anime", id, 1, 1),
             title: "Capitulo 1",
             still: ""
           }
@@ -423,7 +514,9 @@ export async function episodes(ref) {
     const sn = parseInt(seasons[i].season_number, 10);
     if (!sn || sn < 1) continue;
     try {
-      const season = await apiGet("/api/tv/" + encodeURIComponent(tvId) + "/season/" + sn);
+      const season = await apiGet(
+        "/api/tv/" + encodeURIComponent(tvId) + "/season/" + sn
+      );
       const eps = Array.isArray(season.episodes) ? season.episodes : [];
       for (let j = 0; j < eps.length; j++) {
         const ep = eps[j];
@@ -432,13 +525,13 @@ export async function episodes(ref) {
         list.push({
           season: sn,
           number: num,
-          ref: "e:tv:" + tvId + ":" + sn + ":" + num,
+          ref: episodeRef("tv", tvId, sn, num),
           title: ep.name ? String(ep.name).slice(0, 200) : "Capitulo " + num,
           still: absImg(ep.still || ep.still_path || series.poster || "")
         });
       }
     } catch (e) {
-      log("season fail", sn, (e && e.message) || e);
+      log("season", sn, (e && e.message) || e);
     }
   }
 
@@ -446,7 +539,7 @@ export async function episodes(ref) {
     list.push({
       season: 1,
       number: 1,
-      ref: "e:" + type + ":" + tvId + ":1:1",
+      ref: episodeRef(type, tvId, 1, 1),
       title: "Capitulo 1",
       still: series.poster || ""
     });
@@ -455,34 +548,8 @@ export async function episodes(ref) {
   list.sort(function (a, b) {
     return a.season === b.season ? a.number - b.number : a.season - b.season;
   });
-  log("episodes", type + ":" + tvId, list.length);
+  log("episodes", type + ":" + tvId, "n=" + list.length);
   return { series: series, episodes: list };
-}
-
-function parsePlayRef(ref) {
-  let m = /^s:([a-z0-9_]+):e:(movie|tv|anime):([A-Za-z0-9._~-]+):(\d+):(\d+)$/.exec(
-    String(ref || "")
-  );
-  if (m) {
-    return {
-      provider: m[1],
-      type: m[2],
-      id: m[3],
-      season: parseInt(m[4], 10),
-      episode: parseInt(m[5], 10)
-    };
-  }
-  m = /^e:(movie|tv|anime):([A-Za-z0-9._~-]+):(\d+):(\d+)$/.exec(String(ref || ""));
-  if (m) {
-    return {
-      provider: "",
-      type: m[1],
-      id: m[2],
-      season: parseInt(m[3], 10),
-      episode: parseInt(m[4], 10)
-    };
-  }
-  return null;
 }
 
 function pickSources(data) {
@@ -499,7 +566,7 @@ function pickSources(data) {
     if (quality && label.toLowerCase().indexOf(quality.toLowerCase()) < 0) {
       label = label + " · " + quality;
     }
-    const isMp4 = /\.mp4(\?|$)/i.test(url) || /mp4/i.test(quality);
+    const isMp4 = /\.mp4(\?|$)/i.test(url) || /mp4/i.test(quality) || /mp4/i.test(String(s.type || ""));
     out.push({
       url: url,
       label: label.slice(0, 80),
@@ -515,12 +582,13 @@ function pickSources(data) {
 }
 
 async function fetchProviderStream(type, id, season, episode, provider) {
+  const streamType = type === "anime" ? "anime" : type === "movie" ? "movie" : "tv";
   let path =
     "/api/stream?id=" +
     encodeURIComponent(id) +
     "&type=" +
-    encodeURIComponent(type === "anime" ? "anime" : type === "movie" ? "movie" : "tv");
-  if (type !== "movie") {
+    encodeURIComponent(streamType);
+  if (streamType !== "movie") {
     path += "&season=" + encodeURIComponent(String(season || 1));
     path += "&episode=" + encodeURIComponent(String(episode || 1));
   }
@@ -553,14 +621,69 @@ function subtitleTracks(subs) {
   return out;
 }
 
-/**
- * resolve(ref) → Stream
- * download capability: same URL Kino uses to save offline.
- */
+function buildStream(primary, usedProvider, extras, alternateProviders, subtitles, p) {
+  const stream = {
+    url: primary.url,
+    headers: primary.headers,
+    label: primary.label || PROVIDER_LABEL[usedProvider] || usedProvider || "Servidor",
+    expiresInSeconds: 3600
+  };
+  if (primary.mime) stream.mime = primary.mime;
+
+  const alternatives = [];
+  for (let i = 0; i < (extras || []).length; i++) {
+    const a = {
+      url: extras[i].url,
+      headers: extras[i].headers,
+      label: extras[i].label
+    };
+    if (extras[i].mime) a.mime = extras[i].mime;
+    alternatives.push(a);
+  }
+
+  const names = (alternateProviders || []).slice();
+  for (let i = 0; i < PROVIDERS.length; i++) {
+    if (PROVIDERS[i] !== usedProvider && names.indexOf(PROVIDERS[i]) < 0) {
+      names.push(PROVIDERS[i]);
+    }
+  }
+  for (let i = 0; i < names.length && alternatives.length < 12; i++) {
+    const name = String(names[i]);
+    if (!name || name === usedProvider) continue;
+    alternatives.push({
+      label: PROVIDER_LABEL[name] || name,
+      ref:
+        "s:" +
+        name +
+        ":e:" +
+        p.type +
+        ":" +
+        p.id +
+        ":" +
+        p.season +
+        ":" +
+        p.episode
+    });
+  }
+  if (alternatives.length) stream.alternatives = alternatives.slice(0, 12);
+
+  const tracks = subtitleTracks(subtitles);
+  if (tracks.length) stream.subtitles = tracks;
+  return stream;
+}
+
 export async function resolve(ref) {
   await null;
-  const p = parsePlayRef(ref);
-  if (!p) throw err("not_found", "ref " + ref, "Enlace no valido.");
+  const raw = String(ref || "").trim();
+  const p = parsePlayRef(raw);
+  if (!p || !p.id || !p.type) {
+    log("resolve bad ref", raw);
+    throw err(
+      "not_found",
+      "ref " + raw,
+      "Enlace no valido. Abre el titulo e intenta de nuevo."
+    );
+  }
 
   const pref = p.provider || preferredProvider();
   log("resolve", p.type, p.id, "s" + p.season + "e" + p.episode, pref || "auto");
@@ -568,26 +691,20 @@ export async function resolve(ref) {
   if (p.provider) {
     const one = await fetchProviderStream(p.type, p.id, p.season, p.episode, p.provider);
     if (!one.sources.length) {
-      throw err("unavailable", p.provider, "Este servidor no tiene video. Prueba otro.");
+      throw err(
+        "unavailable",
+        p.provider + " empty",
+        "Este servidor no tiene video. Prueba otro en el menu Servidor."
+      );
     }
-    const main = one.sources[0];
-    const stream = {
-      url: main.url,
-      headers: main.headers,
-      label: main.label || PROVIDER_LABEL[p.provider] || p.provider,
-      expiresInSeconds: 3600
-    };
-    if (main.mime) stream.mime = main.mime;
-    if (one.sources.length > 1) {
-      stream.alternatives = one.sources.slice(1, 6).map(function (s) {
-        const a = { url: s.url, headers: s.headers, label: s.label };
-        if (s.mime) a.mime = s.mime;
-        return a;
-      });
-    }
-    const tracks = subtitleTracks(one.subtitles);
-    if (tracks.length) stream.subtitles = tracks;
-    return stream;
+    return buildStream(
+      one.sources[0],
+      one.provider || p.provider,
+      one.sources.slice(1, 4),
+      one.alternates,
+      one.subtitles,
+      p
+    );
   }
 
   let primary = null;
@@ -642,43 +759,7 @@ export async function resolve(ref) {
     throw err("unavailable", "no sources", "No hay servidores disponibles.");
   }
 
-  const stream = {
-    url: primary.url,
-    headers: primary.headers,
-    label: primary.label || PROVIDER_LABEL[usedProvider] || usedProvider || "Servidor",
-    expiresInSeconds: 3600
-  };
-  if (primary.mime) stream.mime = primary.mime;
-
-  const alternatives = [];
-  for (let i = 0; i < extras.length; i++) {
-    const a = {
-      url: extras[i].url,
-      headers: extras[i].headers,
-      label: extras[i].label
-    };
-    if (extras[i].mime) a.mime = extras[i].mime;
-    alternatives.push(a);
-  }
-  const names = alternateProviders.slice();
-  for (let i = 0; i < PROVIDERS.length; i++) {
-    if (PROVIDERS[i] !== usedProvider && names.indexOf(PROVIDERS[i]) < 0) {
-      names.push(PROVIDERS[i]);
-    }
-  }
-  for (let i = 0; i < names.length && alternatives.length < 12; i++) {
-    const name = String(names[i]);
-    if (!name || name === usedProvider) continue;
-    alternatives.push({
-      label: PROVIDER_LABEL[name] || name,
-      ref: "s:" + name + ":e:" + p.type + ":" + p.id + ":" + p.season + ":" + p.episode
-    });
-  }
-  if (alternatives.length) stream.alternatives = alternatives.slice(0, 12);
-
-  const tracks = subtitleTracks(subtitles);
-  if (tracks.length) stream.subtitles = tracks;
-
-  log("resolve OK", stream.label, "alts", alternatives.length);
+  const stream = buildStream(primary, usedProvider, extras, alternateProviders, subtitles, p);
+  log("resolve OK", stream.label, "alts", (stream.alternatives || []).length);
   return stream;
 }
