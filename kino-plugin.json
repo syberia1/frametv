@@ -1,0 +1,143 @@
+{
+  "id": "framextv",
+  "name": "frameXTV",
+  "version": "1.0.0",
+  "apiVersion": 6,
+  "entry": "plugin.js",
+  "description": "Peliculas, series y anime de framextv.cc con todos los servidores disponibles.",
+  "author": "community",
+  "hosts": [
+    "framextv.cc",
+    "www.framextv.cc",
+    "framextv.xyz",
+    "www.framextv.xyz",
+    "framextv.tech",
+    "framextv.pro",
+    "api.framextv.cc",
+    "api.framextv.xyz",
+    "api.framextv.tech",
+    "api.framextv.pro",
+    "image.tmdb.org",
+    "s4.anilist.co",
+    "crap.hybrows.workers.dev",
+    "frappe.hybrows.workers.dev",
+    "framextv-downloads.hybrows.workers.dev",
+    "player.videasy.to",
+    "vidlink.pro",
+    "enc-dec.app",
+    "api.wecollege.net"
+  ],
+  "streamHosts": "any",
+  "capabilities": [
+    "search",
+    "home",
+    "browse",
+    "episodes",
+    "resolve",
+    "download"
+  ],
+  "categories": [
+    "movies",
+    "series",
+    "anime"
+  ],
+  "discoverable": true,
+  "debug": false,
+  "color": "#A855F7",
+  "settings": [
+    {
+      "key": "apiBase",
+      "label": "API backend",
+      "type": "select",
+      "default": "https://api.framextv.cc",
+      "hint": "Si uno falla, cambia de backend.",
+      "options": [
+        {
+          "value": "https://api.framextv.cc",
+          "label": "api.framextv.cc"
+        },
+        {
+          "value": "https://api.framextv.xyz",
+          "label": "api.framextv.xyz"
+        },
+        {
+          "value": "https://api.framextv.tech",
+          "label": "api.framextv.tech"
+        },
+        {
+          "value": "https://api.framextv.pro",
+          "label": "api.framextv.pro"
+        }
+      ]
+    },
+    {
+      "key": "provider",
+      "label": "Servidor preferido",
+      "type": "select",
+      "default": "auto",
+      "hint": "Se intenta primero; el resto queda en el menu Servidor.",
+      "options": [
+        {
+          "value": "auto",
+          "label": "Automatico"
+        },
+        {
+          "value": "bowler",
+          "label": "Bowler XVIII"
+        },
+        {
+          "value": "executioner",
+          "label": "Executioner I"
+        },
+        {
+          "value": "titan",
+          "label": "Titan VII"
+        },
+        {
+          "value": "giant",
+          "label": "Giant XI"
+        },
+        {
+          "value": "grand_warden",
+          "label": "Grand Warden I"
+        },
+        {
+          "value": "root_rider",
+          "label": "Root Rider I"
+        },
+        {
+          "value": "archer_queen",
+          "label": "Archer Queen I"
+        },
+        {
+          "value": "hog_rider",
+          "label": "Hog Rider XI"
+        },
+        {
+          "value": "lavahound",
+          "label": "Lava Hound XII"
+        },
+        {
+          "value": "sparky",
+          "label": "Sparky I"
+        },
+        {
+          "value": "super_barbarian",
+          "label": "Super Barbarian XVI"
+        },
+        {
+          "value": "barbarian_king",
+          "label": "Barbarian King I"
+        },
+        {
+          "value": "battle_copter",
+          "label": "Battle Copter I"
+        },
+        {
+          "value": "little_prince",
+          "label": "Little Prince I"
+        }
+      ]
+    }
+  ]
+}
